@@ -1,1 +1,98 @@
+pipeline {
+    agent any
+
+    tools {
+        nodejs 'node21'
+    }
+
+    environment {
+        SCANNER_HOME = tool "sonar-scanner"
+    }
+
+    stages {
+        stage('Git Checkout') {
+            steps {
+                git branch: 'main', credentialsId: 'git-cred', url: 'https://github.com/Moetez-belaid/3-Tier-Full-Stack-Pipeline.git'
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh "npm install"
+            }
+        }
+
+        stage('Unit Test') {
+            steps {
+                sh "npm test"
+            }
+        }
+
+        stage('Trivy FS Scan') {
+            steps {
+                sh "trivy fs --format table -o fs-report.html ."
+            }
+        }
+
+        stage('SonarQube') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh "$SCANNER_HOME/bin/sonar-scanner -Dsonar.projectKey=Campground -Dsonar.projectName=Campground"
+                }
+            }
+        }
+
+        stage('Docker Build & Tag') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh "docker build -t moetezbelaid/camp:latest ."
+                    }
+                }
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                sh "trivy image --format table -o image-report.html moetezbelaid/camp:latest"
+            }
+        }
+
+        stage('Docker Push Image') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh "docker push moetezbelaid/camp:latest"
+                    }
+                }
+            }
+        }
+
+        stage('Docker Deploy to Dev') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh "docker run -d -p 3000:3000 moetezbelaid/camp:latest"
+                    }
+                }
+            }
+        }
+        stage('Deploy To EKS') {
+            steps {
+                withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: 'EKS-5', contextName: '', credentialsId: 'k8-token', namespace: 'webapps', serverUrl: 'https://CE476836F60C942CD9DEC6C3ECBAB2BE.gr7.us-east-1.eks.amazonaws.com']]) {
+                    sh "kubectl apply -f Manifests/dss.yml"
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: 'EKS-5', contextName: '', credentialsId: 'k8-token', namespace: 'webapps', serverUrl: 'https://CE476836F60C942CD9DEC6C3ECBAB2BE.gr7.us-east-1.eks.amazonaws.com']]) {
+                    sh "kubectl get svc -n webapps"
+                    sh "kubectl get pods -n webapps"
+                }
+            }
+        }
+    }
+}
 
